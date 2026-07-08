@@ -1,0 +1,25 @@
+services:
+  ams-bridge:
+    build:
+      context: ./docker/bridge
+    image: ams-bridge:demo
+    container_name: ams-bridge
+    ports:
+      - "3000:3000"
+    environment:
+      MANIFEST_PATH: /app/manifests/demo.yaml
+      NODE_ENV: development
+      LOG_LEVEL: debug
+
+      ATLASSIAN_MCP_URL: https://mcp.atlassian.com/v1/mcp
+      ATLASSIAN_EMAIL: "${ATLASSIAN_EMAIL}"
+      ATLASSIAN_TOKEN: "${ATLASSIAN_TOKEN}"
+      ATLASSIAN_CLOUD_ID: "${ATLASSIAN_CLOUD_ID}"
+
+      GITHUB_PAT: "${GITHUB_PAT}"
+      SNOW_INSTANCE: "${SNOW_INSTANCE}"
+      SNOW_TOKEN: "${SNOW_TOKEN}"
+      BRIDGE_INTERNAL_KEY: "${BRIDGE_INTERNAL_KEY}"
+    volumes:
+      - ./manifests:/app/manifests:ro
+    restart: unless-stopped

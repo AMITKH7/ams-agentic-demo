@@ -1,0 +1,22 @@
+{
+  "name": "ams-bridge",
+  "version": "1.0.0",
+  "description": "AMS Agentic Integration Bridge using Atlassian Rovo MCP Teamwork Graph",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "express": "^4.21.2",
+    "js-yaml": "^4.1.0",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

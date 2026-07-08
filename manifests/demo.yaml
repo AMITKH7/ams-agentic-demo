@@ -1,0 +1,30 @@
+project:
+  name: demo-ams
+  environment: development
+  region: apac
+  maturity: advisory
+
+atlassian:
+  enabled: true
+  rovo_mcp_url: https://mcp.atlassian.com/v1/mcp
+  cloud_id: amitkh.atlassian.net
+  default_jira_issue: KAN-1
+
+github:
+  enabled: false
+  org: AMITKH7
+  repo: AMITKH7/checkout-service
+
+servicenow:
+  instance: https://dev420660.service-now.com
+  confidence_threshold: 0.70
+
+observability:
+  trace_header: x-ams-trace-id
+
+service_map:
+  - ci: checkout-service
+    github_repo: AMITKH7/checkout-service
+    jira_project: KAN
+    confluence_space: AMSKB
+    owning_team: demo-ams-team
