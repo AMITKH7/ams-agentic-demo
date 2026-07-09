@@ -71,3 +71,45 @@ Expected work notes:
 - Confidence: 0.95
 - Jira evidence: KAN-1, KAN-5, KAN-2
 - Confluence evidence: SOP, RCA, Known Errors, Runbooks
+
+## GitHub / Copilot Handoff UI Action
+
+Create second UI Action:
+
+| Field | Value |
+|---|---|
+| Name | Create GitHub Handoff |
+| Table | Incident [incident] |
+| Active | true |
+| Form button | true |
+| Show insert | false |
+| Show update | true |
+| Client | false |
+| Action name | create_github_handoff |
+| Order | 110 |
+| Condition | current.number != '' |
+
+Script source:
+
+`servicenow/CreateGitHubHandoff.ui-action.js`
+
+## Expected GitHub Handoff Result
+
+Clicking `Create GitHub Handoff` after reviewing the AMS triage pack should:
+
+1. Call `/api/v1/remediation/handoff`.
+2. Create a GitHub issue in `AMITKH7/checkout-service`.
+3. Write the GitHub issue URL back to ServiceNow work notes.
+4. Preserve Human Gate 2 before any Copilot/code remediation proceeds.
+
+Example work note:
+
+AMS GitHub/Copilot handoff created.
+
+Trace ID: AMS-HANDOFF-INC0010001-...
+Source Incident: INC0010001
+Approved By: admin
+Selected Jira: KAN-1
+GitHub Issue: https://github.com/AMITKH7/checkout-service/issues/3
+
+Human Gate 2 required before CoHuman Gate 2 required before Co.

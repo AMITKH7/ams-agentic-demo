@@ -5,6 +5,19 @@ AMSBridgeClient.prototype = {
     },
 
     runTriage: function (incidentNumber) {
+        return this._postToBridge('/api/v1/incident/triage', {
+            incidentNumber: incidentNumber
+        });
+    },
+
+    createGitHubHandoff: function (incidentNumber, approvedBy) {
+        return this._postToBridge('/api/v1/remediation/handoff', {
+            incidentNumber: incidentNumber,
+            approvedBy: approvedBy || gs.getUserName()
+        });
+    },
+
+    _postToBridge: function (path, payload) {
         var bridgeUrl = gs.getProperty('ams.bridge.url', '');
         var bridgeKey = gs.getProperty('ams.bridge.key', '');
 
@@ -24,7 +37,7 @@ AMSBridgeClient.prototype = {
             };
         }
 
-        var endpoint = bridgeUrl.replace(/\/+$/, '') + '/api/v1/incident/triage';
+        var endpoint = bridgeUrl.replace(/\/+$/, '') + path;
 
         var request = new sn_ws.RESTMessageV2();
         request.setHttpMethod('POST');
@@ -32,10 +45,7 @@ AMSBridgeClient.prototype = {
         request.setRequestHeader('Content-Type', 'application/json');
         request.setRequestHeader('Accept', 'application/json');
         request.setRequestHeader('x-ams-internal-key', bridgeKey);
-
-        request.setRequestBody(JSON.stringify({
-            incidentNumber: incidentNumber
-        }));
+        request.setRequestBody(JSON.stringify(payload));
 
         try {
             if (typeof request.setHttpTimeout === 'function') {
@@ -46,19 +56,19 @@ AMSBridgeClient.prototype = {
             var status = response.getStatusCode();
             var body = response.getBody();
 
-            var payload = {};
+            var parsed = {};
             try {
-                payload = JSON.parse(body || '{}');
+                parsed = JSON.parse(body || '{}');
             } catch (parseError) {
-                payload = {
+                parsed = {
                     rawBody: body
                 };
             }
 
             return {
-                success: status >= 200 && status < 300 && payload.degrade !== true,
+                success: status >= 200 && status < 300 && parsed.degrade !== true,
                 status: status,
-                payload: payload,
+                payload: parsed,
                 body: body
             };
 
