@@ -30,7 +30,10 @@ AMSBridgeClient.prototype = {
         request.setHttpMethod('POST');
         request.setEndpoint(endpoint);
         request.setRequestHeader('Content-Type', 'application/json');
-                                                                                                       -in                                                          SO    ringify({
+        request.setRequestHeader('Accept', 'application/json');
+        request.setRequestHeader('x-ams-internal-key', bridgeKey);
+
+        request.setRequestBody(JSON.stringify({
             incidentNumber: incidentNumber
         }));
 
@@ -40,8 +43,10 @@ AMSBridgeClient.prototype = {
             }
 
             var response = request.execute();
-            var status =             var status =             var status =             var s;
-            vvar payload = {};
+            var status = response.getStatusCode();
+            var body = response.getBody();
+
+            var payload = {};
             try {
                 payload = JSON.parse(body || '{}');
             } catch (parseError) {
