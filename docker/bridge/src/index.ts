@@ -2,8 +2,10 @@ import express from "express";
 import { loadManifest, findService } from "./config/loader";
 import { AtlassianAdapter } from "./adapters/atlassian";
 import { ServiceNowAdapter } from "./adapters/servicenow";
+import { GitHubAdapter } from "./adapters/github";
 import { buildTriagePack, buildDynamicTriagePack } from "./services/triageService";
 import { enhanceTriagePackIfEnabled } from "./services/aiEnhancementService";
+import { createGitHubHandoff } from "./services/githubHandoffService";
 import { makeTraceId } from "./security/tracing";
 import { requireEnv } from "./security/vault";
 
@@ -14,6 +16,7 @@ const manifest = loadManifest();
 
 let atlassian: AtlassianAdapter;
 let servicenow: ServiceNowAdapter;
+let github: GitHubAdapter;
 
 function requireInternalKey(
   req: express.Request,
@@ -191,6 +194,8 @@ app.get("/health", (_req, res) => {
     ai_provider: manifest.ai_enhance.provider,
     ai_model: manifest.ai_enhance.model,
     github_handoff_enabled: manifest.github_handoff.enabled,
+    github_handoff_provider: manifest.github_handoff.provider,
+    github_handoff_repo: manifest.github_handoff.repo,
     time: new Date().toISOString()
   });
 });
@@ -344,6 +349,96 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
   }
 });
 
+app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => {
+  const {
+    incidentNumber,
+    approvedBy = "unknown",
+    jiraIssueKey
+  } = req.body || {};
+
+  if (!incidentNumber) {
+    return res.status(400).json({
+      error: "missing_incident_number",
+      message: "incidentNumber is required"
+    });
+  }
+
+  const traceId = makeTraceId(`HANDOFF-${incidentNumber}`);
+
+  if (!manifest.github_handoff.enabled) {
+    return res.status(409).json({
+      traceId,
+      degrade: true,
+      error: "github_handoff_disabled",
+      message: "GitHub/Copilot handoff is disabled in demo.yaml. Set github_handoff.enabled=true to enable this endpoint."
+    });
+  }
+
+  try {
+    console.log(`[bridge] GitHub handoff started | traceId=${traceId} | incident=${incidentNumber}`);
+
+    const incident = await servicenow.getIncidentByNumber(incidentNumber, traceId);
+    const ciName = extractCiName(incident.description, "checkout-service");
+
+    const result = await generateTriagePack({
+      incidentNumber: incident.number,
+      shortDescription: incident.short_description || "",
+      description: incident.description || "",
+      ciName,
+      jiraIssueKey,
+      traceId
+    });
+
+    const handoff = await createGitHubHandoff(github, {
+      incidentNumber: incident.number,
+      shortDescription: incident.short_description || "",
+      ciName,
+      selectedJira: result.issueKey,
+      approvedBy,
+      triagePack: result.triagePack
+    });
+
+    const workNotes = [
+      `AMS GitHub/Copilot handoff created.`,
+      ``,
+      `Trace ID: ${traceId}`,
+      `Source Incident: ${incident.number}`,
+      `Approved By: ${approvedBy}`,
+      `Selected Jira: ${result.issueKey}`,
+      `GitHub Issue: ${handoff.issue.html_url}`,
+      ``,
+      `Human Gate 2 required before Copilot/code remediation proceeds.`
+    ].join("\n");
+
+    await servicenow.updateWorkNotes(incident.sys_id, workNotes, traceId);
+
+    console.log(`[bridge] GitHub handoff completed | traceId=${traceId} | issue=${handoff.issue.html_url}`);
+
+    res.json({
+      traceId,
+      degrade: false,
+      incidentNumber: incident.number,
+      sysId: incident.sys_id,
+      ciName,
+      jiraIssueKey: result.issueKey,
+      approvedBy,
+      githubIssue: handoff.issue,
+      workNotesUpdated: true
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    console.error(`[bridge] GitHub handoff failed | traceId=${traceId} | ${message}`);
+
+    res.status(500).json({
+      traceId,
+      degrade: true,
+      error: "github_handoff_failed",
+      detail: message
+    });
+  }
+});
+
 async function start() {
   console.log(`[bridge] Starting project=${manifest.project.name}`);
 
@@ -351,6 +446,7 @@ async function start() {
   await atlassian.init();
 
   servicenow = new ServiceNowAdapter(manifest.observability.trace_header);
+  github = new GitHubAdapter(manifest);
 
   const port = Number(process.env.PORT || 3000);
 

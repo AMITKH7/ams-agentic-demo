@@ -1,0 +1,1 @@
+{"traceId":"AMS-HANDOFF-INC0010001-1783581720439","degrade":true,"error":"github_handoff_disabled","message":"GitHub/Copilot handoff is disabled in demo.yaml. Set github_handoff.enabled=true to enable this endpoint."}
