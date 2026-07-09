@@ -16,24 +16,50 @@ export interface Manifest {
     region: string;
     maturity: string;
   };
+
+  servicenow: {
+    instance: string;
+    confidence_threshold: number;
+    similar_incident_first: boolean;
+    system_of_record: boolean;
+  };
+
   atlassian: {
     enabled: boolean;
     rovo_mcp_url: string;
     cloud_id: string;
-    default_jira_issue: string;
+    jira_project: string;
+    confluence_space: string;
+    dynamic_search: {
+      enabled: boolean;
+      max_results: number;
+      max_jira_results: number;
+      max_confluence_results: number;
+      fallback_jira_issue: string;
+      query_boost_terms: string[];
+    };
   };
-  github: {
+
+  ai_enhance: {
     enabled: boolean;
-    org: string;
+    provider: string;
+    timeout_ms: number;
+    max_words: number;
+    fallback_on_error: boolean;
+  };
+
+  github_handoff: {
+    enabled: boolean;
+    provider: string;
     repo: string;
+    human_gate_required: boolean;
+    duplicate_protection: boolean;
   };
-  servicenow: {
-    instance: string;
-    confidence_threshold: number;
-  };
+
   observability: {
     trace_header: string;
   };
+
   service_map: ServiceEntry[];
 }
 

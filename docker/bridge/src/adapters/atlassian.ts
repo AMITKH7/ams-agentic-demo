@@ -11,6 +11,35 @@ type JsonRpcBody = {
   params?: Record<string, unknown>;
 };
 
+export type AtlassianSearchResult = {
+  id: string;
+  title?: string;
+  text?: string;
+  url?: string;
+  type?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type FetchedAtlassianResult = {
+  source: AtlassianSearchResult;
+  payload?: any;
+  error?: string;
+};
+
+export type DynamicAtlassianContext = {
+  query: string;
+  results: AtlassianSearchResult[];
+  jiraResults: AtlassianSearchResult[];
+  confluenceResults: AtlassianSearchResult[];
+  fetchedConfluence: FetchedAtlassianResult[];
+  bestJiraIssueKey: string;
+  bestJiraSource?: AtlassianSearchResult;
+  graphContext?: any;
+  hydratedObjects?: any;
+  objectAris: string[];
+  usedFallbackJira: boolean;
+};
+
 export class AtlassianAdapter {
   private authHeader = "";
   private sessionId = "";
@@ -184,6 +213,322 @@ export class AtlassianAdapter {
     }
 
     return parsed;
+  }
+
+  buildIncidentSearchQuery(params: {
+    shortDescription?: string;
+    description?: string;
+    ciName?: string;
+  }): string {
+    const boostTerms = this.manifest.atlassian.dynamic_search.query_boost_terms || [];
+
+    const raw = [
+      params.ciName || "",
+      params.shortDescription || "",
+      params.description || "",
+      ...boostTerms
+    ]
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return raw.slice(0, 500);
+  }
+
+  async searchAtlassian(
+    query: string,
+    traceId: string
+  ): Promise<AtlassianSearchResult[]> {
+    const response = await this.callTool(
+      "searchAtlassian",
+      {
+        cloudId: this.manifest.atlassian.cloud_id,
+        query
+      },
+      traceId
+    );
+
+    const payload = this.extractToolTextPayload(response);
+    const results = payload?.results || [];
+
+    return Array.isArray(results) ? results : [];
+  }
+
+  async fetchAtlassian(
+    source: AtlassianSearchResult,
+    traceId: string
+  ): Promise<FetchedAtlassianResult> {
+    try {
+      const response = await this.callTool(
+        "fetchAtlassian",
+        {
+          cloudId: this.manifest.atlassian.cloud_id,
+          id: source.id
+        },
+        traceId
+      );
+
+      return {
+        source,
+        payload: this.extractToolTextPayload(response)
+      };
+    } catch (error) {
+      return {
+        source,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  private isJiraResult(result: AtlassianSearchResult): boolean {
+    return (
+      result.type === "issue" ||
+      result.id?.includes(":jira:") ||
+      Boolean(result.url?.includes("/browse/"))
+    );
+  }
+
+  private isConfluenceResult(result: AtlassianSearchResult): boolean {
+    return (
+      result.type === "page" ||
+      result.id?.includes(":confluence:") ||
+      Boolean(result.url?.includes("/wiki/"))
+    );
+  }
+
+  private extractJiraKey(result: AtlassianSearchResult): string | undefined {
+    const fromUrl = result.url?.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)/)?.[1];
+    if (fromUrl) {
+      return fromUrl;
+    }
+
+    const fromTitle = result.title?.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1];
+    if (fromTitle) {
+      return fromTitle;
+    }
+
+    const fromText = result.text?.match(/\b([A-Z][A-Z0-9]+-\d+)\b/)?.[1];
+    return fromText;
+  }
+  
+  private buildJiraJql(params: {
+    shortDescription?: string;
+    description?: string;
+    ciName?: string;
+  }): string {
+    const project = this.manifest.atlassian.jira_project || "KAN";
+
+    const combined = [
+      params.ciName || "",
+      params.shortDescription || "",
+      params.description || ""
+    ]
+      .join(" ")
+      .replace(/CI:\s*[a-zA-Z0-9._-]+/gi, " ")
+      .replace(/[^a-zA-Z0-9\s-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+
+    let searchPhrase = "checkout payment timeout";
+
+    if (combined.includes("payment") && combined.includes("timeout")) {
+      searchPhrase = "payment timeout";
+    } else if (combined.includes("checkout") && combined.includes("timeout")) {
+      searchPhrase = "checkout timeout";
+    } else if (params.ciName) {
+      searchPhrase = params.ciName;
+    }
+
+    return `project = ${project} AND text ~ "${searchPhrase}" ORDER BY updated DESC`;
+  }
+
+  private normaliseJiraSearchPayload(payload: any): AtlassianSearchResult[] {
+    const rawIssues =
+      payload?.issues ||
+      payload?.data?.issues ||
+      payload?.result?.issues ||
+      payload?.data?.data?.issues ||
+      [];
+
+    if (!Array.isArray(rawIssues)) {
+      return [];
+    }
+
+    return rawIssues.map((issue: any): AtlassianSearchResult => {
+      const key = issue.key || issue.issueKey || issue.id || "UNKNOWN";
+      const fields = issue.fields || issue;
+
+      const summary =
+        fields.summary ||
+        issue.summary ||
+        issue.title ||
+        key;
+
+      const description =
+        fields.description ||
+        issue.description ||
+        issue.text ||
+        "";
+
+      const url =
+        issue.url ||
+        issue.webUrl ||
+        (key !== "UNKNOWN"
+          ? `https://${this.manifest.atlassian.cloud_id}/browse/${key}`
+          : undefined);
+
+      return {
+        id: issue.id || key,
+        title: `${key}: ${summary}`,
+        text: typeof description === "string" ? description : JSON.stringify(description),
+        url,
+        type: "issue",
+        metadata: {
+          source: "searchJiraIssuesUsingJql",
+          key
+        }
+      };
+    });
+  }
+
+  async searchJiraIssuesUsingJql(
+    jql: string,
+    traceId: string
+  ): Promise<AtlassianSearchResult[]> {
+    const response = await this.callTool(
+      "searchJiraIssuesUsingJql",
+      {
+        cloudId: this.manifest.atlassian.cloud_id,
+        jql,
+        maxResults: this.manifest.atlassian.dynamic_search.max_jira_results,
+        fields: [
+          "summary",
+          "description",
+          "status",
+          "issuetype",
+          "priority",
+          "labels",
+          "components",
+          "assignee",
+          "reporter",
+          "created",
+          "updated",
+          "resolution",
+          "project",
+          "comment"
+        ],
+        responseContentFormat: "markdown"
+      },
+      traceId
+    );
+
+    const payload = this.extractToolTextPayload(response);
+    return this.normaliseJiraSearchPayload(payload);
+  } 
+
+  async getDynamicAtlassianContext(params: {
+    shortDescription?: string;
+    description?: string;
+    ciName?: string;
+    traceId: string;
+  }): Promise<DynamicAtlassianContext> {
+    const query = this.buildIncidentSearchQuery({
+      shortDescription: params.shortDescription,
+      description: params.description,
+      ciName: params.ciName
+    });
+
+    const allResults = await this.searchAtlassian(query, params.traceId);
+
+    const maxResults = this.manifest.atlassian.dynamic_search.max_results;
+    const maxJira = this.manifest.atlassian.dynamic_search.max_jira_results;
+    const maxConfluence = this.manifest.atlassian.dynamic_search.max_confluence_results;
+
+    const results = allResults.slice(0, maxResults);
+
+    let jiraResults = results
+      .filter(result => this.isJiraResult(result))
+      .slice(0, maxJira);
+
+    const confluenceResults = results
+      .filter(result => this.isConfluenceResult(result))
+      .slice(0, maxConfluence);
+    
+
+    if (jiraResults.length === 0) {
+      const jql = this.buildJiraJql({
+        shortDescription: params.shortDescription,
+        description: params.description,
+        ciName: params.ciName
+      });
+
+      console.log(
+        `[atlassian] No Jira issue returned by searchAtlassian. Running Jira JQL fallback: ${jql}`
+      );
+
+      try {
+        jiraResults = await this.searchJiraIssuesUsingJql(jql, params.traceId);
+      } catch (error) {
+        console.warn(
+          `[atlassian] Jira JQL fallback failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+
+    const fetchedConfluence: FetchedAtlassianResult[] = [];
+
+    for (const page of confluenceResults) {
+      fetchedConfluence.push(await this.fetchAtlassian(page, params.traceId));
+    }
+
+    const fallbackJira = this.manifest.atlassian.dynamic_search.fallback_jira_issue;
+    const bestJiraSource = jiraResults[0];
+    const bestJiraIssueKey = bestJiraSource
+      ? this.extractJiraKey(bestJiraSource) || fallbackJira
+      : fallbackJira;
+
+    const usedFallbackJira = !bestJiraSource;
+
+    let graphContext: any;
+    let hydratedObjects: any;
+    let objectAris: string[] = [];
+
+    try {
+      graphContext = await this.getJiraWorkItemContext(
+        bestJiraIssueKey,
+        params.traceId,
+        20
+      );
+
+      objectAris = this.collectJiraObjectAris(graphContext, 5);
+
+      if (objectAris.length > 0) {
+        hydratedObjects = await this.hydrateObjects(objectAris, params.traceId);
+      }
+    } catch (error) {
+      console.warn(
+        `[atlassian] Teamwork Graph expansion failed for ${bestJiraIssueKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
+    return {
+      query,
+      results,
+      jiraResults,
+      confluenceResults,
+      fetchedConfluence,
+      bestJiraIssueKey,
+      bestJiraSource,
+      graphContext,
+      hydratedObjects,
+      objectAris,
+      usedFallbackJira
+    };
   }
 
   async getJiraWorkItemContext(

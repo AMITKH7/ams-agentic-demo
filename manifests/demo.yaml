@@ -4,12 +4,6 @@ project:
   region: apac
   maturity: advisory
 
-atlassian:
-  enabled: true
-  rovo_mcp_url: https://mcp.atlassian.com/v1/mcp
-  cloud_id: amitkh.atlassian.net
-  default_jira_issue: KAN-1
-
 github:
   enabled: false
   org: AMITKH7
@@ -18,6 +12,43 @@ github:
 servicenow:
   instance: https://dev420660.service-now.com
   confidence_threshold: 0.70
+  similar_incident_first: true
+  system_of_record: true
+
+atlassian:
+  enabled: true
+  rovo_mcp_url: https://mcp.atlassian.com/v1/mcp
+  cloud_id: amitkh.atlassian.net
+  jira_project: KAN
+  confluence_space: AMSKB
+
+  dynamic_search:
+    enabled: true
+    max_results: 10
+    max_jira_results: 5
+    max_confluence_results: 5
+    fallback_jira_issue: KAN-1
+    query_boost_terms:
+      - runbook
+      - RCA
+      - known error
+      - SOP
+      - retry
+      - timeout
+
+ai_enhance:
+  enabled: false
+  provider: claude
+  timeout_ms: 8000
+  max_words: 300
+  fallback_on_error: true
+
+github_handoff:
+  enabled: false
+  provider: copilot
+  repo: AMITKH7/checkout-service
+  human_gate_required: true
+  duplicate_protection: true
 
 observability:
   trace_header: x-ams-trace-id

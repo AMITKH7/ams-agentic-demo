@@ -18,6 +18,8 @@ services:
 
       GITHUB_PAT: "${GITHUB_PAT}"
       SNOW_INSTANCE: "${SNOW_INSTANCE}"
+      SNOW_USER: "${SNOW_USER}"
+      SNOW_PASSWORD: "${SNOW_PASSWORD}"
       SNOW_TOKEN: "${SNOW_TOKEN}"
       BRIDGE_INTERNAL_KEY: "${BRIDGE_INTERNAL_KEY}"
     volumes:
