@@ -43,6 +43,7 @@ export interface Manifest {
   ai_enhance: {
     enabled: boolean;
     provider: string;
+    model: string;
     timeout_ms: number;
     max_words: number;
     fallback_on_error: boolean;

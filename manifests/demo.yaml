@@ -38,7 +38,8 @@ atlassian:
 
 ai_enhance:
   enabled: false
-  provider: claude
+  provider: openai
+  model: gpt-5.5
   timeout_ms: 8000
   max_words: 300
   fallback_on_error: true

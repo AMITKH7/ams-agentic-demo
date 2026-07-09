@@ -3,6 +3,7 @@ import { loadManifest, findService } from "./config/loader";
 import { AtlassianAdapter } from "./adapters/atlassian";
 import { ServiceNowAdapter } from "./adapters/servicenow";
 import { buildTriagePack, buildDynamicTriagePack } from "./services/triageService";
+import { enhanceTriagePackIfEnabled } from "./services/aiEnhancementService";
 import { makeTraceId } from "./security/tracing";
 import { requireEnv } from "./security/vault";
 
@@ -95,7 +96,7 @@ async function generateTriagePack(params: {
       traceId: params.traceId
     });
 
-    const triagePack = buildDynamicTriagePack({
+    let baseTriagePack = buildDynamicTriagePack({
       incidentNumber: params.incidentNumber,
       shortDescription: params.shortDescription,
       description: params.description || "",
@@ -103,12 +104,33 @@ async function generateTriagePack(params: {
       dynamicContext
     });
 
+    baseTriagePack = baseTriagePack.replace(
+      "AI Enhancement | Disabled - deterministic bridge pack",
+      `AI Enhancement | ${
+        manifest.ai_enhance.enabled
+          ? "Enabled - OpenAI optional narrative"
+          : "Disabled - deterministic bridge pack"
+      }`
+    );
+
+    const aiResult = await enhanceTriagePackIfEnabled(manifest, {
+      incidentNumber: params.incidentNumber,
+      shortDescription: params.shortDescription,
+      ciName: params.ciName,
+      analysisMode: "dynamic",
+      selectedJira: dynamicContext.bestJiraIssueKey,
+      triagePack: baseTriagePack
+    });
+
     return {
       mode: "dynamic",
       issueKey: dynamicContext.bestJiraIssueKey,
       service,
       objectAris: dynamicContext.objectAris || [],
-      triagePack,
+      triagePack: aiResult.triagePack,
+      aiEnhanced: aiResult.aiEnhanced,
+      aiProvider: aiResult.provider,
+      aiError: aiResult.error,
       dynamicContext,
       triageContext: undefined
     };
@@ -127,7 +149,7 @@ async function generateTriagePack(params: {
     params.traceId
   );
 
-  const triagePack = buildTriagePack({
+  const baseTriagePack = buildTriagePack({
     incidentNumber: params.incidentNumber,
     ciName: params.ciName,
     issueKey,
@@ -135,12 +157,24 @@ async function generateTriagePack(params: {
     hydratedObjectsPayload: triageContext.hydratedObjects
   });
 
+  const aiResult = await enhanceTriagePackIfEnabled(manifest, {
+    incidentNumber: params.incidentNumber,
+    shortDescription: params.shortDescription,
+    ciName: params.ciName,
+    analysisMode: "seeded",
+    selectedJira: issueKey,
+    triagePack: baseTriagePack
+  });
+
   return {
     mode: "seeded",
     issueKey,
     service,
     objectAris: triageContext.objectAris || [],
-    triagePack,
+    triagePack: aiResult.triagePack,
+    aiEnhanced: aiResult.aiEnhanced,
+    aiProvider: aiResult.provider,
+    aiError: aiResult.error,
     dynamicContext: undefined,
     triageContext
   };
@@ -154,6 +188,8 @@ app.get("/health", (_req, res) => {
     atlassian_enabled: manifest.atlassian.enabled,
     dynamic_search_enabled: manifest.atlassian.dynamic_search.enabled,
     ai_enhance_enabled: manifest.ai_enhance.enabled,
+    ai_provider: manifest.ai_enhance.provider,
+    ai_model: manifest.ai_enhance.model,
     github_handoff_enabled: manifest.github_handoff.enabled,
     time: new Date().toISOString()
   });
@@ -188,6 +224,9 @@ app.post("/api/v1/knowledge/search", requireInternalKey, async (req, res) => {
       traceId,
       degrade: false,
       analysisMode: result.mode,
+      aiEnhanced: result.aiEnhanced,
+      aiProvider: result.aiProvider,
+      aiError: result.aiError,
       incidentNumber,
       shortDescription,
       description,
@@ -255,6 +294,9 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
       `Source Incident: ${incident.number}`,
       `Mapped CI: ${ciName}`,
       `Analysis Mode: ${result.mode}`,
+      `AI Enhanced: ${result.aiEnhanced ? "Yes" : "No"}`,
+      `AI Provider: ${result.aiProvider || "none"}`,
+      result.aiError ? `AI Error: ${result.aiError}` : undefined,
       `Primary Jira: ${result.issueKey}`,
       dynamicSummary?.query ? `Dynamic Search Query: ${dynamicSummary.query}` : undefined,
       ``,
@@ -275,6 +317,9 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
       traceId,
       degrade: false,
       analysisMode: result.mode,
+      aiEnhanced: result.aiEnhanced,
+      aiProvider: result.aiProvider,
+      aiError: result.aiError,
       incidentNumber: incident.number,
       sysId: incident.sys_id,
       ciName,
