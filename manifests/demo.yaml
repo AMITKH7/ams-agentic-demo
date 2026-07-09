@@ -45,7 +45,7 @@ ai_enhance:
   fallback_on_error: true
 
 github_handoff:
-  enabled: false
+  enabled: true
   provider: copilot
   repo: AMITKH7/checkout-service
   human_gate_required: true
