@@ -1,3 +1,4 @@
+import { metrics } from "./metricsService";
 import { TraceEvent, TraceStore } from "./traceStore";
 
 export class AuditEventService {
@@ -21,6 +22,8 @@ export class AuditEventService {
       latencyMs: input.latencyMs,
       details: input.details
     };
+
+    metrics.recordAuditAction(input.action, input.status, input.latencyMs);
 
     console.log(JSON.stringify({
       timestamp: event.timestamp,

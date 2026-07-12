@@ -8,11 +8,14 @@ import { enhanceTriagePackIfEnabled } from "./services/aiEnhancementService";
 import { createGitHubHandoff } from "./services/githubHandoffService";
 import { TraceStore } from "./services/traceStore";
 import { AuditEventService } from "./services/auditEventService";
+import { metrics } from "./services/metricsService";
+import { registerObservabilityRoutes } from "./services/observabilityRoutes";
 import { makeTraceId } from "./security/tracing";
 import { requireEnv } from "./security/vault";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+app.use(metrics.httpMiddleware());
 
 const traceStore = new TraceStore(
   process.env.TRACE_STORE_PATH || "/app/data/ams-traces.json"
@@ -20,6 +23,7 @@ const traceStore = new TraceStore(
 const auditEvents = new AuditEventService(traceStore);
 
 const manifest = loadManifest();
+registerObservabilityRoutes(app, manifest, traceStore);
 
 let atlassian: AtlassianAdapter;
 let servicenow: ServiceNowAdapter;
