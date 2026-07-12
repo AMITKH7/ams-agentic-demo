@@ -10,8 +10,10 @@ import { TraceStore } from "./services/traceStore";
 import { AuditEventService } from "./services/auditEventService";
 import { metrics } from "./services/metricsService";
 import { registerObservabilityRoutes } from "./services/observabilityRoutes";
+import { registerGitHubWebhookRoutes } from "./services/githubWebhookRoutes";
 import { makeTraceId } from "./security/tracing";
 import { requireEnv } from "./security/vault";
+
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -686,7 +688,10 @@ async function start() {
   servicenow = new ServiceNowAdapter(manifest.observability.trace_header);
   github = new GitHubAdapter(manifest);
 
+  registerGitHubWebhookRoutes(app, traceStore, auditEvents, servicenow);
+
   const port = Number(process.env.PORT || 3000);
+  
 
   app.listen(port, () => {
     console.log(`[bridge] Running on http://localhost:${port}`);

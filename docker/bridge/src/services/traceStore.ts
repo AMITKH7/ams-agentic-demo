@@ -41,6 +41,9 @@ export type AmsTraceRecord = {
     | "GITHUB_ISSUE_CREATED"
     | "GITHUB_HANDOFF_REUSED"
     | "PR_CREATED"
+    | "PR_UPDATED"
+    | "PR_MERGED"
+    | "PR_CLOSED"
     | "FAILED";
   createdAt: string;
   updatedAt: string;
