@@ -22,13 +22,13 @@ function buildIssueTitle(input: GitHubHandoffInput): string {
 function buildIssueBody(input: GitHubHandoffInput): string {
   return `# AMS GitHub / Copilot Handoff
 
-## Human Gate
+## Human Gate 1
 
 This handoff was manually approved by:
 
 \`${input.approvedBy}\`
 
-Code remediation must not be merged automatically. Any pull request created from this issue must remain a draft until reviewed.
+Code remediation must not be merged automatically. Any pull request created from this issue must remain draft/open until reviewed by an engineer.
 
 ## Incident Context
 
@@ -41,13 +41,22 @@ Code remediation must not be merged automatically. Any pull request created from
 
 ## Copilot Remediation Instructions
 
-Use the triage pack below as the only source of incident context.
+Use the triage pack below as incident context.
 
 Expected remediation behavior:
 
-1. Identify the checkout payment timeout handling path.1. Identify the ther timeout errors are retried through the standard retry wrapper.
-1. Identify the checkout tial 1. Identify theme1. Identify theout e1. Identify the checkout tial 1. Identify theme1. Identify ule1. Identify the checkout tial 1. Identify theme1. Identify theout e1. Identill request as Draft.
-7. Include references to ServiceNow incident ${input.incidentNumber} and Jira ${input.selectedJira}.
+1. Locate the checkout payment confirmation path.
+2. Retry only transient payment gateway timeout errors.
+3. Do not retry validation, card-decline, or business errors.
+4. Use a small bounded retry count.
+5. Keep retry logic isolated and unit-testable.
+6. Add or update automated tests.
+7. Run validation before completion:
+   - npm test
+   - npm run build
+8. Create a pull request for human review.
+9. Do not auto-merge.
+10. Include references to ServiceNow incident ${input.incidentNumber} and Jira ${input.selectedJira}.
 
 ## Source Triage Pack
 

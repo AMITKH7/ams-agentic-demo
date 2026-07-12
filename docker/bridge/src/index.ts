@@ -6,11 +6,18 @@ import { GitHubAdapter } from "./adapters/github";
 import { buildTriagePack, buildDynamicTriagePack } from "./services/triageService";
 import { enhanceTriagePackIfEnabled } from "./services/aiEnhancementService";
 import { createGitHubHandoff } from "./services/githubHandoffService";
+import { TraceStore } from "./services/traceStore";
+import { AuditEventService } from "./services/auditEventService";
 import { makeTraceId } from "./security/tracing";
 import { requireEnv } from "./security/vault";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+
+const traceStore = new TraceStore(
+  process.env.TRACE_STORE_PATH || "/app/data/ams-traces.json"
+);
+const auditEvents = new AuditEventService(traceStore);
 
 const manifest = loadManifest();
 
@@ -196,6 +203,8 @@ app.get("/health", (_req, res) => {
     github_handoff_enabled: manifest.github_handoff.enabled,
     github_handoff_provider: manifest.github_handoff.provider,
     github_handoff_repo: manifest.github_handoff.repo,
+    trace_store_path: process.env.TRACE_STORE_PATH || "/app/data/ams-traces.json",
+    trace_records: traceStore.list().length,
     time: new Date().toISOString()
   });
 });
@@ -210,6 +219,18 @@ app.post("/api/v1/knowledge/search", requireInternalKey, async (req, res) => {
   } = req.body || {};
 
   const traceId = makeTraceId(incidentNumber);
+  const startedAt = Date.now();
+
+  auditEvents.emit({
+    incidentNumber,
+    traceId,
+    action: "KNOWLEDGE_SEARCH_STARTED",
+    status: "started",
+    details: {
+      ciName,
+      jiraIssueKey
+    }
+  });
 
   try {
     console.log(`[bridge] Knowledge search started | traceId=${traceId}`);
@@ -221,6 +242,18 @@ app.post("/api/v1/knowledge/search", requireInternalKey, async (req, res) => {
       ciName,
       jiraIssueKey,
       traceId
+    });
+
+    auditEvents.emit({
+      incidentNumber,
+      traceId,
+      action: "KNOWLEDGE_SEARCH_COMPLETED",
+      status: "success",
+      latencyMs: Date.now() - startedAt,
+      details: {
+        mode: result.mode,
+        selectedJira: result.issueKey
+      }
     });
 
     console.log(`[bridge] Knowledge search completed | traceId=${traceId}`);
@@ -244,6 +277,15 @@ app.post("/api/v1/knowledge/search", requireInternalKey, async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+
+    auditEvents.emit({
+      incidentNumber,
+      traceId,
+      action: "KNOWLEDGE_SEARCH_FAILED",
+      status: "failure",
+      message,
+      latencyMs: Date.now() - startedAt
+    });
 
     console.error(`[bridge] Knowledge search failed | traceId=${traceId} | ${message}`);
 
@@ -270,6 +312,17 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
   }
 
   const traceId = makeTraceId(incidentNumber);
+  const startedAt = Date.now();
+
+  auditEvents.emit({
+    incidentNumber,
+    traceId,
+    action: "TRIAGE_STARTED",
+    status: "started",
+    details: {
+      jiraIssueKey
+    }
+  });
 
   try {
     console.log(`[bridge] ServiceNow triage started | traceId=${traceId} | incident=${incidentNumber}`);
@@ -280,6 +333,14 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
       incident.description,
       "checkout-service"
     );
+
+    traceStore.upsert({
+      incidentNumber: incident.number,
+      incidentSysId: incident.sys_id,
+      traceId,
+      ciName,
+      status: "TRIAGE_STARTED"
+    });
 
     const result = await generateTriagePack({
       incidentNumber: incident.number,
@@ -316,6 +377,28 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
       traceId
     );
 
+    const traceRecord = traceStore.upsert({
+      incidentNumber: incident.number,
+      incidentSysId: incident.sys_id,
+      traceId,
+      ciName,
+      selectedJira: result.issueKey,
+      status: "TRIAGE_COMPLETED"
+    });
+
+    auditEvents.emit({
+      incidentNumber: incident.number,
+      traceId,
+      action: "TRIAGE_COMPLETED",
+      status: "success",
+      latencyMs: Date.now() - startedAt,
+      details: {
+        mode: result.mode,
+        selectedJira: result.issueKey,
+        workNotesUpdated: true
+      }
+    });
+
     console.log(`[bridge] ServiceNow triage completed | traceId=${traceId} | incident=${incidentNumber}`);
 
     res.json({
@@ -332,11 +415,28 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
       serviceEntry: result.service,
       objectAris: result.objectAris,
       dynamicSearch: dynamicSummary,
+      trace: traceRecord,
       workNotesUpdated: true,
       triagePack: result.triagePack
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+
+    traceStore.upsert({
+      incidentNumber,
+      traceId,
+      status: "FAILED",
+      lastError: message
+    });
+
+    auditEvents.emit({
+      incidentNumber,
+      traceId,
+      action: "TRIAGE_FAILED",
+      status: "failure",
+      message,
+      latencyMs: Date.now() - startedAt
+    });
 
     console.error(`[bridge] ServiceNow triage failed | traceId=${traceId} | ${message}`);
 
@@ -364,8 +464,28 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
   }
 
   const traceId = makeTraceId(`HANDOFF-${incidentNumber}`);
+  const startedAt = Date.now();
+
+  auditEvents.emit({
+    incidentNumber,
+    traceId,
+    action: "GITHUB_HANDOFF_REQUESTED",
+    status: "started",
+    details: {
+      approvedBy,
+      jiraIssueKey
+    }
+  });
 
   if (!manifest.github_handoff.enabled) {
+    auditEvents.emit({
+      incidentNumber,
+      traceId,
+      action: "GITHUB_HANDOFF_DISABLED",
+      status: "skipped",
+      message: "GitHub/Copilot handoff is disabled"
+    });
+
     return res.status(409).json({
       traceId,
       degrade: true,
@@ -379,6 +499,73 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
 
     const incident = await servicenow.getIncidentByNumber(incidentNumber, traceId);
     const ciName = extractCiName(incident.description, "checkout-service");
+
+    const existingTrace = traceStore.getByIncidentNumber(incident.number);
+
+    if (existingTrace?.githubIssue?.html_url) {
+      const reusedWorkNotes = [
+        `AMS GitHub/Copilot handoff reused.`,
+        ``,
+        `Trace ID: ${traceId}`,
+        `Source Incident: ${incident.number}`,
+        `Approved By: ${approvedBy}`,
+        `Selected Jira: ${existingTrace.selectedJira || jiraIssueKey || "not available"}`,
+        `Existing GitHub Issue: ${existingTrace.githubIssue.html_url}`,
+        existingTrace.githubPr?.html_url
+          ? `Existing Copilot PR: ${existingTrace.githubPr.html_url}`
+          : undefined,
+        ``,
+        `Duplicate prevention applied: no new GitHub issue was created.`,
+        ``,
+        `Human Gate 1 already completed: existing GitHub/Copilot handoff reused.`,
+        `Human Gate 2 required before Copilot/code remediation proceeds.`
+      ]
+        .filter((line): line is string => line !== undefined)
+        .join("\n");
+
+      await servicenow.updateWorkNotes(incident.sys_id, reusedWorkNotes, traceId);
+
+      const traceRecord = traceStore.upsert({
+        incidentNumber: incident.number,
+        incidentSysId: incident.sys_id,
+        traceId,
+        ciName,
+        selectedJira: existingTrace.selectedJira || jiraIssueKey,
+        githubIssue: existingTrace.githubIssue,
+        githubPr: existingTrace.githubPr,
+        status: "GITHUB_HANDOFF_REUSED"
+      });
+
+      auditEvents.emit({
+        incidentNumber: incident.number,
+        traceId,
+        action: "GITHUB_DUPLICATE_PREVENTED",
+        status: "success",
+        latencyMs: Date.now() - startedAt,
+        details: {
+          githubIssue: existingTrace.githubIssue.html_url,
+          githubPr: existingTrace.githubPr?.html_url
+        }
+      });
+
+      console.log(`[bridge] GitHub handoff reused | traceId=${traceId} | issue=${existingTrace.githubIssue.html_url}`);
+
+      return res.json({
+        traceId,
+        degrade: false,
+        idempotent: true,
+        reused: true,
+        incidentNumber: incident.number,
+        sysId: incident.sys_id,
+        ciName,
+        jiraIssueKey: existingTrace.selectedJira || jiraIssueKey,
+        approvedBy,
+        githubIssue: existingTrace.githubIssue,
+        githubPr: existingTrace.githubPr,
+        trace: traceRecord,
+        workNotesUpdated: true
+      });
+    }
 
     const result = await generateTriagePack({
       incidentNumber: incident.number,
@@ -398,6 +585,21 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
       triagePack: result.triagePack
     });
 
+    const traceRecord = traceStore.upsert({
+      incidentNumber: incident.number,
+      incidentSysId: incident.sys_id,
+      traceId,
+      ciName,
+      selectedJira: result.issueKey,
+      githubIssue: {
+        number: handoff.issue.number,
+        html_url: handoff.issue.html_url,
+        api_url: handoff.issue.api_url,
+        title: handoff.issue.title
+      },
+      status: "GITHUB_ISSUE_CREATED"
+    });
+
     const workNotes = [
       `AMS GitHub/Copilot handoff created.`,
       ``,
@@ -407,26 +609,58 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
       `Selected Jira: ${result.issueKey}`,
       `GitHub Issue: ${handoff.issue.html_url}`,
       ``,
+      `Human Gate 1 completed: engineer approved GitHub/Copilot handoff.`,
       `Human Gate 2 required before Copilot/code remediation proceeds.`
     ].join("\n");
 
     await servicenow.updateWorkNotes(incident.sys_id, workNotes, traceId);
+
+    auditEvents.emit({
+      incidentNumber: incident.number,
+      traceId,
+      action: "GITHUB_ISSUE_CREATED",
+      status: "success",
+      latencyMs: Date.now() - startedAt,
+      details: {
+        githubIssue: handoff.issue.html_url,
+        selectedJira: result.issueKey
+      }
+    });
 
     console.log(`[bridge] GitHub handoff completed | traceId=${traceId} | issue=${handoff.issue.html_url}`);
 
     res.json({
       traceId,
       degrade: false,
+      idempotent: false,
+      reused: false,
       incidentNumber: incident.number,
       sysId: incident.sys_id,
       ciName,
       jiraIssueKey: result.issueKey,
       approvedBy,
       githubIssue: handoff.issue,
+      trace: traceRecord,
       workNotesUpdated: true
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+
+    traceStore.upsert({
+      incidentNumber,
+      traceId,
+      status: "FAILED",
+      lastError: message
+    });
+
+    auditEvents.emit({
+      incidentNumber,
+      traceId,
+      action: "GITHUB_HANDOFF_FAILED",
+      status: "failure",
+      message,
+      latencyMs: Date.now() - startedAt
+    });
 
     console.error(`[bridge] GitHub handoff failed | traceId=${traceId} | ${message}`);
 
