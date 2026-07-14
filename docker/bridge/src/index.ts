@@ -13,7 +13,11 @@ import { registerObservabilityRoutes } from "./services/observabilityRoutes";
 import { registerGitHubWebhookRoutes } from "./services/githubWebhookRoutes";
 import { makeTraceId } from "./security/tracing";
 import { requireEnv } from "./security/vault";
-
+import {
+  buildGitHubHandoffCreatedWorkNotes,
+  buildGitHubHandoffReusedWorkNotes,
+  buildTriageCompletedWorkNotes
+} from "./services/workNoteTemplates";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -359,23 +363,18 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
 
     const dynamicSummary = summariseDynamicContext(result.dynamicContext);
 
-    const workNotes = [
-      `AMS Agentic Triage completed.`,
-      ``,
-      `Trace ID: ${traceId}`,
-      `Source Incident: ${incident.number}`,
-      `Mapped CI: ${ciName}`,
-      `Analysis Mode: ${result.mode}`,
-      `AI Enhanced: ${result.aiEnhanced ? "Yes" : "No"}`,
-      `AI Provider: ${result.aiProvider || "none"}`,
-      result.aiError ? `AI Error: ${result.aiError}` : undefined,
-      `Primary Jira: ${result.issueKey}`,
-      dynamicSummary?.query ? `Dynamic Search Query: ${dynamicSummary.query}` : undefined,
-      ``,
-      result.triagePack
-    ]
-      .filter(line => line !== undefined)
-      .join("\n");
+    const workNotes = buildTriageCompletedWorkNotes({
+      traceId,
+      incidentNumber: incident.number,
+      ciName,
+      analysisMode: result.mode,
+      aiEnhanced: result.aiEnhanced,
+      aiProvider: result.aiProvider,
+      aiError: result.aiError,
+      selectedJira: result.issueKey,
+      dynamicSearchQuery: dynamicSummary?.query,
+      triagePack: result.triagePack
+    });
 
     await servicenow.updateWorkNotes(
       incident.sys_id,
@@ -509,25 +508,14 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
     const existingTrace = traceStore.getByIncidentNumber(incident.number);
 
     if (existingTrace?.githubIssue?.html_url) {
-      const reusedWorkNotes = [
-        `AMS GitHub/Copilot handoff reused.`,
-        ``,
-        `Trace ID: ${traceId}`,
-        `Source Incident: ${incident.number}`,
-        `Approved By: ${approvedBy}`,
-        `Selected Jira: ${existingTrace.selectedJira || jiraIssueKey || "not available"}`,
-        `Existing GitHub Issue: ${existingTrace.githubIssue.html_url}`,
-        existingTrace.githubPr?.html_url
-          ? `Existing Copilot PR: ${existingTrace.githubPr.html_url}`
-          : undefined,
-        ``,
-        `Duplicate prevention applied: no new GitHub issue was created.`,
-        ``,
-        `Human Gate 1 already completed: existing GitHub/Copilot handoff reused.`,
-        `Human Gate 2 required before Copilot/code remediation proceeds.`
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
+      const reusedWorkNotes = buildGitHubHandoffReusedWorkNotes({
+        traceId,
+        incidentNumber: incident.number,
+        approvedBy,
+        selectedJira: existingTrace.selectedJira || jiraIssueKey,
+        githubIssueUrl: existingTrace.githubIssue.html_url,
+        githubPrUrl: existingTrace.githubPr?.html_url
+      });
 
       await servicenow.updateWorkNotes(incident.sys_id, reusedWorkNotes, traceId);
 
@@ -606,18 +594,13 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
       status: "GITHUB_ISSUE_CREATED"
     });
 
-    const workNotes = [
-      `AMS GitHub/Copilot handoff created.`,
-      ``,
-      `Trace ID: ${traceId}`,
-      `Source Incident: ${incident.number}`,
-      `Approved By: ${approvedBy}`,
-      `Selected Jira: ${result.issueKey}`,
-      `GitHub Issue: ${handoff.issue.html_url}`,
-      ``,
-      `Human Gate 1 completed: engineer approved GitHub/Copilot handoff.`,
-      `Human Gate 2 required before Copilot/code remediation proceeds.`
-    ].join("\n");
+    const workNotes = buildGitHubHandoffCreatedWorkNotes({
+      traceId,
+      incidentNumber: incident.number,
+      approvedBy,
+      selectedJira: result.issueKey,
+      githubIssueUrl: handoff.issue.html_url
+    });
 
     await servicenow.updateWorkNotes(incident.sys_id, workNotes, traceId);
 

@@ -3,6 +3,7 @@ import { ServiceNowAdapter } from "../adapters/servicenow";
 import { makeTraceId } from "../security/tracing";
 import { AuditEventService } from "./auditEventService";
 import { AmsTraceRecord, TraceStore } from "./traceStore";
+import { buildCopilotPrDetectedWorkNotes } from "./workNoteTemplates";
 
 type PullRequestPayload = {
   action?: string;
@@ -105,27 +106,19 @@ function buildPrWorkNotes(input: {
   branch?: string;
   merged?: boolean;
 }): string {
-  return [
-    `AMS Copilot remediation PR detected.`,
-    ``,
-    `Trace ID: ${input.traceId}`,
-    `Webhook Action: ${input.action}`,
-    `Source Incident: ${input.record.incidentNumber}`,
-    `Selected Jira: ${input.record.selectedJira || "not available"}`,
-    input.record.githubIssue?.html_url
-      ? `GitHub Issue: ${input.record.githubIssue.html_url}`
-      : undefined,
-    `Copilot PR: ${input.prUrl}`,
-    `PR Number: #${input.prNumber}`,
-    `PR State: ${input.prState || "not available"}`,
-    `Draft: ${input.draft === true ? "Yes" : "No"}`,
-    input.branch ? `Branch: ${input.branch}` : undefined,
-    input.merged !== undefined ? `Merged: ${input.merged ? "Yes" : "No"}` : undefined,
-    ``,
-    `Human Gate 2 required: engineer must review validation evidence before merge.`
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
+  return buildCopilotPrDetectedWorkNotes({
+    traceId: input.traceId,
+    incidentNumber: input.record.incidentNumber,
+    selectedJira: input.record.selectedJira,
+    githubIssueUrl: input.record.githubIssue?.html_url,
+    prUrl: input.prUrl,
+    prNumber: input.prNumber,
+    prState: input.prState,
+    draft: input.draft,
+    branch: input.branch,
+    action: input.action,
+    merged: input.merged
+  });
 }
 
 export function registerGitHubWebhookRoutes(
