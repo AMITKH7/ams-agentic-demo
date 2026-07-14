@@ -9,6 +9,12 @@ export interface ServiceEntry {
   owning_team: string;
 }
 
+export interface AiEnhanceRefineConfig {
+  servicenow_triage_notes: boolean;
+  github_handoff_issue: boolean;
+  copilot_guardrails: boolean;
+}
+
 export interface Manifest {
   project: {
     name: string;
@@ -47,6 +53,7 @@ export interface Manifest {
     timeout_ms: number;
     max_words: number;
     fallback_on_error: boolean;
+    refine?: AiEnhanceRefineConfig;
   };
 
   github_handoff: {
@@ -72,7 +79,18 @@ export function loadManifest(): Manifest {
   }
 
   const raw = fs.readFileSync(path, "utf8");
-  return yaml.load(raw) as Manifest;
+  const manifest = yaml.load(raw) as Manifest;
+
+  manifest.ai_enhance.refine = {
+    servicenow_triage_notes:
+      manifest.ai_enhance.refine?.servicenow_triage_notes ?? true,
+    github_handoff_issue:
+      manifest.ai_enhance.refine?.github_handoff_issue ?? true,
+    copilot_guardrails:
+      manifest.ai_enhance.refine?.copilot_guardrails ?? true
+  };
+
+  return manifest;
 }
 
 export function findService(manifest: Manifest, ciName: string): ServiceEntry | undefined {

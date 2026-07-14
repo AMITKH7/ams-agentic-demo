@@ -43,6 +43,10 @@ ai_enhance:
   timeout_ms: 8000
   max_words: 300
   fallback_on_error: true
+  refine:
+    servicenow_triage_notes: true
+    github_handoff_issue: true
+    copilot_guardrails: true
 
 github_handoff:
   enabled: true

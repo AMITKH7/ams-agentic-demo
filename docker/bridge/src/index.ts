@@ -5,7 +5,7 @@ import { ServiceNowAdapter } from "./adapters/servicenow";
 import { GitHubAdapter } from "./adapters/github";
 import { buildTriagePack, buildDynamicTriagePack } from "./services/triageService";
 import { enhanceTriagePackIfEnabled } from "./services/aiEnhancementService";
-import { createGitHubHandoff } from "./services/githubHandoffService";
+import { createGitHubHandoff, buildGitHubHandoffBodyPreview } from "./services/githubHandoffService";
 import { TraceStore } from "./services/traceStore";
 import { AuditEventService } from "./services/auditEventService";
 import { metrics } from "./services/metricsService";
@@ -454,6 +454,96 @@ app.post("/api/v1/incident/triage", requireInternalKey, async (req, res) => {
   }
 });
 
+
+app.post("/api/v1/remediation/handoff/preview", requireInternalKey, async (req, res) => {
+  const traceId =
+    req.headers[manifest.observability.trace_header] as string ||
+    `AMS-HANDOFF-PREVIEW-${Date.now()}`;
+
+  try {
+    const incidentNumber = req.body?.incidentNumber;
+    const approvedBy = req.body?.approvedBy || "preview-user";
+
+    if (!incidentNumber) {
+      return res.status(400).json({
+        degrade: true,
+        traceId,
+        error: "incidentNumber is required"
+      });
+    }
+
+    const incident = await servicenow.getIncidentByNumber(incidentNumber, traceId);
+
+    const cmdbCi = incident.cmdb_ci as any;
+
+    const ciName =
+      typeof cmdbCi === "string"
+        ? extractCiName(cmdbCi, "checkout-service")
+        : extractCiName(
+            cmdbCi?.display_value || cmdbCi?.value || "checkout-service",
+            "checkout-service"
+          );
+
+    const result = await generateTriagePack({
+      incidentNumber: incident.number,
+      shortDescription: incident.short_description || "",
+      description: incident.description || "",
+      ciName,
+      jiraIssueKey: undefined,
+      traceId
+    });
+
+    const preview = await buildGitHubHandoffBodyPreview(manifest, {
+      incidentNumber: incident.number,
+      shortDescription: incident.short_description || "",
+      ciName,
+      selectedJira: result.issueKey,
+      approvedBy,
+      triagePack: result.triagePack
+    });
+
+    auditEvents.emit({
+      traceId,
+      incidentNumber: incident.number,
+      action: "GITHUB_HANDOFF_PREVIEW_GENERATED",
+      status: "success",
+      message: "Generated GitHub/Copilot handoff preview without creating a GitHub issue.",
+      details: {
+        aiEnhanced: preview.aiEnhanced,
+        aiProvider: preview.aiProvider,
+        aiError: preview.aiError
+      }
+    });
+
+    return res.json({
+      degrade: false,
+      traceId,
+      incidentNumber: incident.number,
+      title: preview.title,
+      body: preview.body,
+      aiEnhanced: preview.aiEnhanced,
+      aiProvider: preview.aiProvider,
+      aiError: preview.aiError,
+      note: "Preview only. No GitHub issue was created and no ServiceNow work note was updated."
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    auditEvents.emit({
+      traceId,
+      action: "GITHUB_HANDOFF_PREVIEW_FAILED",
+      status: "failure",
+      message
+    });
+
+    return res.status(500).json({
+      degrade: true,
+      traceId,
+      error: message
+    });
+  }
+});
+
 app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => {
   const {
     incidentNumber,
@@ -570,7 +660,7 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
       traceId
     });
 
-    const handoff = await createGitHubHandoff(github, {
+    const handoff = await createGitHubHandoff(github, manifest, {
       incidentNumber: incident.number,
       shortDescription: incident.short_description || "",
       ciName,
@@ -599,7 +689,10 @@ app.post("/api/v1/remediation/handoff", requireInternalKey, async (req, res) => 
       incidentNumber: incident.number,
       approvedBy,
       selectedJira: result.issueKey,
-      githubIssueUrl: handoff.issue.html_url
+      githubIssueUrl: handoff.issue.html_url,
+      githubIssueAiEnhanced: handoff.aiEnhanced,
+      githubIssueAiProvider: handoff.aiProvider,
+      githubIssueAiError: handoff.aiError
     });
 
     await servicenow.updateWorkNotes(incident.sys_id, workNotes, traceId);
